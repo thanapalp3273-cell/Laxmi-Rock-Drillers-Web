@@ -4,6 +4,7 @@
   <meta charset="utf-8"/>
   <meta content="width=device-width,initial-scale=1.0" name="viewport"/>
   <title>Laxmi Rock Drillers | Developer & Admin Console</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     :root {
       --bg: #030a12;
@@ -76,6 +77,7 @@
       transition: transform 0.15s ease, opacity 0.15s ease;
     }
     .btn:hover { opacity: 0.92; transform: translateY(-1px); }
+    .btn:disabled { opacity: 0.6; cursor: wait; transform: none; }
     .btn-orange {
       background: linear-gradient(135deg, #f97316, #ea580c);
       color: #fff;
@@ -116,7 +118,7 @@
       to { transform: translateX(-100%); }
     }
 
-    /* Passcode Lock Screen (PIN: 3848) */
+    /* Sign-In Screen */
     .login {
       min-height: 100vh;
       display: grid;
@@ -169,12 +171,6 @@
       outline: none;
       border-color: var(--cyan);
       box-shadow: 0 0 0 3px rgba(56,189,248,0.15);
-    }
-    .pin-input {
-      text-align: center;
-      font-size: 24px;
-      letter-spacing: 10px;
-      font-weight: 800;
     }
 
     /* Dashboard Layout */
@@ -341,16 +337,20 @@
     <span>✦ LAXMI ROCK DRILLERS DEVELOPER CONSOLE • ENQUIRIES • 24-HR BROADCASTS • PHOTO BILLING • ADVANCE TOKENS • DAILY PHOTOS ✦</span>
   </div>
 
-  <!-- Passcode Unlock Screen (PIN: 3848) -->
+  <!-- Developer Sign-In Screen -->
   <div class="login" id="login">
     <div class="loginbox">
       <div class="eyebrow">SECURE OPERATOR ACCESS</div>
       <h1>Laxmi Rock Drillers<br/><span style="color:var(--cyan)">Developer Web</span></h1>
-      <p>Enter the 4-digit passcode to unlock the operational console.</p>
-      <input class="input pin-input" id="pass" inputmode="numeric" maxlength="4" placeholder="••••" type="password"/>
-      <button class="btn btn-orange" onclick="unlock()" style="width:100%;margin-top:6px">Unlock Console</button>
+      <p id="authIntro">Sign in with your authorized developer email and password.</p>
+      <form id="authForm" onsubmit="submitAuth(event)">
+        <input class="input" id="authEmail" autocomplete="email" placeholder="developer@example.com" required type="email"/>
+        <input class="input" id="authPassword" autocomplete="current-password" minlength="6" placeholder="Password (min. 6 characters)" required type="password"/>
+        <button class="btn btn-orange" id="authSubmit" style="width:100%;margin-top:6px" type="submit">Sign In</button>
+      </form>
       <div id="err" style="color:#f87171;font-size:12px;margin-top:12px;font-weight:700"></div>
-      <p style="color:#64748b;font-size:11px;margin-top:18px">Authorized contractor personnel only (PIN: 3848).</p>
+      <button class="outline" id="authToggle" onclick="toggleAuthMode()" style="width:100%;margin-top:14px" type="button">Create a developer account</button>
+      <p style="color:#64748b;font-size:11px;margin-top:18px">Authorized contractor personnel only.</p>
     </div>
   </div>
 
@@ -392,11 +392,15 @@
         <h3>📢 Field Notices & Announcements</h3>
         <p class="muted">24-Hour rig updates auto-expire after 24 hrs; announcements expire at 11:59 PM today.</p>
         
-        <form onsubmit="addUpdate(event)">
+        <form id="noticeForm" onsubmit="saveNotice(event)">
           <input class="input" name="title" placeholder="Notice Title (e.g. Rig Mobilized to Attayampatti)" required/>
           <textarea class="input" name="text" placeholder="Notice details, route, or customer instructions..." required rows="3"></textarea>
-          <button class="btn" type="submit">Publish 24-Hour Notice</button>
+          <div style="display:flex;gap:10px;align-items:center">
+            <button class="btn" id="noticeSubmit" type="submit">Publish 24-Hour Notice</button>
+            <button class="outline" id="noticeCancel" onclick="resetNoticeForm()" style="display:none" type="button">Cancel Edit</button>
+          </div>
         </form>
+        <div id="noticeFeedback"></div>
 
         <hr style="border-color:rgba(255,255,255,0.08);margin:20px 0"/>
         
@@ -511,12 +515,19 @@
 
     <footer>
       <div>Laxmi Rock Drillers (லக்ஷ்மி ராக் டிரில்லர்ஸ்) • Developer Console</div>
-      <div>Attayampatti, Salem Dt. • Passcode: 3848</div>
+      <div>Attayampatti, Salem Dt.</div>
     </footer>
   </div>
 
   <script>
     const KEY = 'lrd_v3';
+    const SUPABASE_URL = 'https://qdmewqnyfbtgipnyfqge.supabase.co';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFkbWV3cW55ZmJ0Z2lwbnlmcWdlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM1MzgyNDIsImV4cCI6MjEwOTExNDI0Mn0.x4KsPm8LvoOkdD7mK41lvzN5l46U6y6NwVwcAW5sd00';
+    const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    let authMode = 'signin';
+    let editingNoticeId = null;
+    let loadedNotices = [];
 
     function getData() {
       try { return JSON.parse(localStorage.getItem(KEY) || '{}'); }
@@ -527,7 +538,6 @@
     }
     function clean() {
       let d = getData(), now = Date.now();
-      d.updates = (d.updates || []).filter(x => x.expires > now);
       d.photos = (d.photos || []).filter(x => x.expires > now);
       d.orders = (d.orders || []).filter(x => !x.deleted);
       d.bills = d.bills || [];
@@ -545,23 +555,76 @@
       return d.getTime();
     }
 
-    // Unlock logic (PIN 3848)
-    function unlock() {
-      const pin = document.getElementById('pass').value.trim();
-      if (pin === '3848') {
-        sessionStorage.setItem('lrd_dev_auth', '1');
-        showDash();
-      } else {
-        document.getElementById('err').textContent = 'Incorrect passcode. Please try again.';
+    // Developer sign-in and sign-up
+    function toggleAuthMode() {
+      authMode = authMode === 'signin' ? 'signup' : 'signin';
+      const signup = authMode === 'signup';
+      document.getElementById('authIntro').textContent = signup
+        ? 'Create an account, then ask the project owner to authorize it for developer access.'
+        : 'Sign in with your authorized developer email and password.';
+      document.getElementById('authPassword').autocomplete = signup ? 'new-password' : 'current-password';
+      document.getElementById('authToggle').textContent = signup ? 'I already have an account' : 'Create a developer account';
+      showAuthError('');
+      setAuthBusy(false);
+    }
+    function setAuthBusy(busy) {
+      const btn = document.getElementById('authSubmit');
+      btn.disabled = busy;
+      btn.textContent = busy ? 'Please wait...' : (authMode === 'signup' ? 'Create Account' : 'Sign In');
+    }
+    function showAuthError(msg) {
+      document.getElementById('err').textContent = msg;
+    }
+    function friendlyAuthError(error) {
+      const msg = String(error?.message || '').toLowerCase();
+      if (msg.includes('invalid login')) return 'Email or password is incorrect.';
+      if (msg.includes('already registered')) return 'An account with this email already exists. Sign in instead.';
+      if (msg.includes('password')) return 'Password must be at least 6 characters.';
+      return 'Could not complete this request. Please try again.';
+    }
+    async function submitAuth(e) {
+      e.preventDefault();
+      const email = document.getElementById('authEmail').value.trim();
+      const password = document.getElementById('authPassword').value;
+      showAuthError('');
+      setAuthBusy(true);
+      try {
+        const { error } = authMode === 'signup'
+          ? await sb.auth.signUp({ email, password })
+          : await sb.auth.signInWithPassword({ email, password });
+        if (error) {
+          showAuthError(friendlyAuthError(error));
+          return;
+        }
+        await enterConsoleIfAuthorized();
+      } catch (err) {
+        showAuthError('Could not reach the server. Check your connection and try again.');
+      } finally {
+        setAuthBusy(false);
       }
+    }
+    async function isAuthorizedDeveloper() {
+      const { data, error } = await sb.rpc('is_developer');
+      if (error) throw error;
+      return data === true;
+    }
+    async function enterConsoleIfAuthorized() {
+      const { data: { session } } = await sb.auth.getSession();
+      if (!session) return;
+      if (!(await isAuthorizedDeveloper())) {
+        await sb.auth.signOut();
+        showAuthError('This account is not authorized for developer access. Ask the project owner to add it.');
+        return;
+      }
+      showDash();
     }
     function showDash() {
       document.getElementById('login').style.display = 'none';
       document.getElementById('dash').style.display = 'block';
       render();
     }
-    function logout() {
-      sessionStorage.removeItem('lrd_dev_auth');
+    async function logout() {
+      await sb.auth.signOut();
       location.reload();
     }
 
@@ -724,47 +787,106 @@
       renderOrders();
     }
 
-    function addUpdate(e) {
-      e.preventDefault();
-      const f = e.target, d = clean();
-      d.updates = d.updates || [];
-      d.updates.push({
-        id: Date.now(),
-        title: f.title.value.trim(),
-        text: f.text.value.trim(),
-        created: Date.now(),
-        expires: Date.now() + 86400000
-      });
-      saveData(d);
-      f.reset();
-      renderUpdatesAdmin();
-      alert('24-Hour Notice successfully published.');
+    // Field notices (shared announcements stored in the online database)
+    function noticeStatus(n) {
+      if (!n.is_published) return { label: 'HIDDEN', color: '#94a3b8' };
+      if (new Date(n.expires_at) <= new Date()) return { label: 'EXPIRED', color: '#f87171' };
+      return { label: 'LIVE', color: '#34d399' };
     }
-    function renderUpdatesAdmin() {
-      const d = clean(), box = document.getElementById('updates');
-      if (!box) return;
-      if (!d.updates?.length) {
+    async function loadNotices() {
+      const box = document.getElementById('updates');
+      const { data, error } = await sb
+        .from('announcements')
+        .select('id, title, body, is_published, expires_at')
+        .order('created_at', { ascending: false });
+      if (error || !Array.isArray(data)) {
+        box.innerHTML = '<div class="empty" style="color:#f87171">Could not load notices. Check your connection and refresh the page.</div>';
+        return;
+      }
+      loadedNotices = data;
+      if (!data.length) {
         box.innerHTML = '<div class="empty">No active field notices.</div>';
         return;
       }
-      box.innerHTML = d.updates.slice().reverse().map(u => {
-        const hrs = Math.max(1, Math.round((u.expires - Date.now()) / 3600000));
+      box.innerHTML = data.map(n => {
+        const st = noticeStatus(n);
+        const hrs = Math.max(1, Math.round((new Date(n.expires_at) - Date.now()) / 3600000));
+        const timing = st.label === 'LIVE'
+          ? `Expires in ${hrs} hours`
+          : (st.label === 'EXPIRED' ? 'Past its expiry time' : 'Hidden from customers');
         return `
           <div class="row">
             <div>
-              <b>${esc(u.title)}</b><br>
-              <small style="color:var(--muted)">${esc(u.text)} • Expires in ${hrs} hours</small>
+              <b>${esc(n.title)}</b>
+              <span style="color:${st.color};font-size:11px;font-weight:800;margin-left:6px">${st.label}</span><br>
+              <small style="color:var(--muted)">${esc(n.body)} • ${timing}</small>
             </div>
-            <button class="smallbtn danger" onclick="deleteUpdate(${u.id})">Remove</button>
+            <div style="display:flex;gap:6px">
+              <button class="smallbtn" style="background:#0f2744;color:var(--cyan)" onclick="editNotice('${esc(n.id)}')">Edit</button>
+              <button class="smallbtn danger" onclick="deleteNotice('${esc(n.id)}')">Remove</button>
+            </div>
           </div>
         `;
       }).join('');
     }
-    function deleteUpdate(id) {
-      let d = clean();
-      d.updates = (d.updates || []).filter(x => x.id !== id);
-      saveData(d);
-      renderUpdatesAdmin();
+    async function saveNotice(e) {
+      e.preventDefault();
+      const f = e.target;
+      const submit = document.getElementById('noticeSubmit');
+      const feedback = document.getElementById('noticeFeedback');
+      const title = f.title.value.trim();
+      const body = f.text.value.trim();
+      const wasEditing = editingNoticeId !== null;
+      submit.disabled = true;
+      feedback.innerHTML = '';
+      try {
+        const query = wasEditing
+          ? sb.from('announcements')
+              .update({ title, body, updated_at: new Date().toISOString() })
+              .eq('id', editingNoticeId)
+          : sb.from('announcements')
+              .insert({ title, body, expires_at: new Date(Date.now() + 86400000).toISOString() });
+        const { data, error } = await query.select('id').maybeSingle();
+        if (error || !data) {
+          feedback.innerHTML = '<div class="empty" style="color:#f87171">Could not save the notice. Refresh the page and try again.</div>';
+          return;
+        }
+        resetNoticeForm();
+        await loadNotices();
+        alert(wasEditing ? 'Notice updated successfully.' : '24-Hour Notice successfully published.');
+      } catch (err) {
+        feedback.innerHTML = '<div class="empty" style="color:#f87171">Could not save the notice. Check your connection and try again.</div>';
+      } finally {
+        submit.disabled = false;
+      }
+    }
+    function editNotice(id) {
+      const n = loadedNotices.find(x => x.id === id);
+      if (!n) return;
+      const f = document.getElementById('noticeForm');
+      f.title.value = n.title;
+      f.text.value = n.body;
+      editingNoticeId = id;
+      document.getElementById('noticeSubmit').textContent = 'Save Changes';
+      document.getElementById('noticeCancel').style.display = 'inline-flex';
+      document.getElementById('noticeFeedback').innerHTML = '';
+      f.title.focus();
+    }
+    function resetNoticeForm() {
+      editingNoticeId = null;
+      document.getElementById('noticeForm').reset();
+      document.getElementById('noticeSubmit').textContent = 'Publish 24-Hour Notice';
+      document.getElementById('noticeCancel').style.display = 'none';
+    }
+    async function deleteNotice(id) {
+      if (!confirm('Remove this notice from the customer website?')) return;
+      const { error } = await sb.from('announcements').delete().eq('id', id);
+      if (error) {
+        alert('Could not remove the notice. Please try again.');
+        return;
+      }
+      if (editingNoticeId === id) resetNoticeForm();
+      await loadNotices();
     }
 
     async function addDailyPhoto(e) {
@@ -821,16 +943,16 @@
 
     function render() {
       renderOrders();
-      renderUpdatesAdmin();
+      loadNotices();
       renderBillsAdmin();
       renderPhotosAdmin();
     }
 
     window.addEventListener('storage', render);
     document.addEventListener('DOMContentLoaded', () => {
-      if (sessionStorage.getItem('lrd_dev_auth') === '1') {
-        showDash();
-      }
+      enterConsoleIfAuthorized().catch(() => {
+        showAuthError('Could not verify developer access. Please sign in again.');
+      });
     });
   </script>
 </body>
